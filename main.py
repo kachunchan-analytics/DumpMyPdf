@@ -171,6 +171,23 @@ class Controller:
         self.index = PDFTextIndex(os.getcwd(), self.logger)
         self.concatenator = PDFConcatenator()
 
+    def _write_text_output(self, results: List[Tuple[str, int]], output_pdf_path: str) -> bool:
+        """Write the extracted page texts to a .txt file (same basename as output_pdf_path)."""
+        txt_path = output_pdf_path.replace('.pdf', '.txt')
+        try:
+            with open(txt_path, 'w', encoding='utf-8') as f:
+                for filepath, page_num in results:
+                    # Retrieve the page text from the indexed series
+                    page_text = self.index.pdf_panda_series.loc[(filepath, page_num)]
+                    # Write header with human-readable page number (1-based)
+                    f.write(f"--- {filepath} page {page_num + 1} ---\n")
+                    f.write(page_text)
+                    f.write("\n\n")  # separate pages
+            return True
+        except Exception as e:
+            self.logger.log(Status.ERROR, exc=e, message=f"Failed to write text file: {txt_path}")
+            return False
+
     def run(self):
         print("PDF Keyword Search Tool")
         print("-----------------------")
@@ -199,7 +216,13 @@ class Controller:
 
             success = self.concatenator.concatenate(results, OUTPUT_FILENAME, self.logger)
             if success:
-                print(f"\033[92mSuccessfully created: {OUTPUT_FILENAME}\033[0m\n")
+                print(f"\033[92mSuccessfully created: {OUTPUT_FILENAME}\033[0m")
+                # Also create companion text file
+                if self._write_text_output(results, OUTPUT_FILENAME):
+                    txt_name = OUTPUT_FILENAME.replace('.pdf', '.txt')
+                    print(f"\033[92mSuccessfully created: {txt_name}\033[0m\n")
+                else:
+                    print("\033[93mWarning: Text file could not be created.\033[0m\n")
             else:
                 print("Failed to create output PDF. See error details above.\n")
 
