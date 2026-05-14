@@ -15,6 +15,7 @@ class Status(Enum):
     TIMEOUT  = "timeout"
     FETCH    = "fetch_error"
     PARSE    = "parse_error"
+    WARNING  = "warning"
 
 class TracebackLogger:
     """
