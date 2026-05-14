@@ -5,6 +5,12 @@ from typing import List, Tuple
 from traceback_logger import TracebackLogger, Status
 
 # ----------------------------------------------------------------------
+# Config
+# ----------------------------------------------------------------------
+OUTPUT_FILENAME = "extracted_results.pdf"
+
+
+# ----------------------------------------------------------------------
 # PDFReader
 # ----------------------------------------------------------------------
 class PDFReader:
@@ -13,6 +19,7 @@ class PDFReader:
     def __init__(self, filepath: str):
         self.filepath = filepath
         self._reader = None
+        self._file_handle = None   # Keep file open
 
     def _ensure_reader(self):
         """Lazy load the PdfReader, with LBYL checks."""
@@ -23,11 +30,14 @@ class PDFReader:
             if not os.access(self.filepath, os.R_OK):
                 raise PermissionError(f"PDF file not readable: {self.filepath}")
 
-            # Open and read – may still raise PyPDF errors (corrupted file)
+            # Open file and keep handle open (no with block)
             try:
-                with open(self.filepath, "rb") as f:
-                    self._reader = PyPDF.PdfReader(f)
+                self._file_handle = open(self.filepath, "rb")
+                self._reader = pypdf.PdfReader(self._file_handle)
             except Exception as e:
+                # Clean up if opening fails
+                if self._file_handle:
+                    self._file_handle.close()
                 raise RuntimeError(f"Failed to open PDF {self.filepath}: {e}") from e
         return self._reader
 
@@ -38,7 +48,6 @@ class PDFReader:
     def get_page_text(self, page_num: int) -> str:
         """Extract text from a specific page (0-indexed)."""
         reader = self._ensure_reader()
-        # LBYL: Check page index
         if page_num < 0 or page_num >= len(reader.pages):
             raise IndexError(f"Page {page_num} out of range (0..{len(reader.pages)-1})")
         try:
@@ -54,6 +63,14 @@ class PDFReader:
             raise IndexError(f"Page {page_num} out of range")
         return reader.pages[page_num]
 
+    def close(self):
+        """Explicitly close the underlying file handle if still open."""
+        if self._file_handle and not self._file_handle.closed:
+            self._file_handle.close()
+
+    def __del__(self):
+        """Ensure file handle is closed when the object is destroyed."""
+        self.close()
 # ----------------------------------------------------------------------
 # PDFSearcher
 # ----------------------------------------------------------------------
@@ -211,14 +228,9 @@ class Controller:
                 continue
 
             print(f"Found {len(results)} page(s) containing '{keyword}'.")
-            default_out = f"concatenated_{keyword}.pdf"
-            out_name = input(f"Enter output PDF filename (default: {default_out}): ").strip()
-            if not out_name:
-                out_name = default_out
-            # LBYL: Ensure .pdf extension
-            if not out_name.lower().endswith(".pdf"):
-                out_name += ".pdf"
-                print(f"Added .pdf extension -> {out_name}")
+            # Use the config constant instead of asking user
+            out_name = OUTPUT_FILENAME
+            print(f"Output will be saved to: {out_name}")
 
             success = self.concatenator.concatenate(results, out_name, self.logger)
             if success:
