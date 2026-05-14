@@ -1,6 +1,6 @@
 import os
 import pypdf
-from pypdf import PdfReader
+import pandas as pd
 from typing import List, Tuple
 from traceback_logger import TracebackLogger, Status
 
@@ -9,9 +9,8 @@ from traceback_logger import TracebackLogger, Status
 # ----------------------------------------------------------------------
 OUTPUT_FILENAME = "extracted_results.pdf"
 
-
 # ----------------------------------------------------------------------
-# PDFReader
+# PDFReader (fixed: keeps file handle open)
 # ----------------------------------------------------------------------
 class PDFReader:
     """Handles opening a PDF file and extracting text/page objects."""
@@ -71,71 +70,82 @@ class PDFReader:
     def __del__(self):
         """Ensure file handle is closed when the object is destroyed."""
         self.close()
-# ----------------------------------------------------------------------
-# PDFSearcher
-# ----------------------------------------------------------------------
-class PDFSearcher:
-    """Search for a keyword across PDF files."""
 
-    def __init__(self, logger: TracebackLogger):
+# ----------------------------------------------------------------------
+# PDFTextIndex – builds a pandas Series of page text once
+# ----------------------------------------------------------------------
+class PDFTextIndex:
+    """
+    Extracts text from every page of every PDF in a directory,
+    stores it in a pandas Series, and provides fast keyword search.
+    """
+
+    def __init__(self, directory: str, logger: TracebackLogger):
+        self.directory = directory
         self.logger = logger
+        self.pdf_panda_series = None
+        self._build_index()
 
-    def _is_valid_pdf_file(self, filepath: str) -> bool:
-        """LBYL: Check if file looks like a readable PDF."""
-        if not os.path.isfile(filepath):
-            return False
-        if not filepath.lower().endswith(".pdf"):
-            return False
-        if not os.access(filepath, os.R_OK):
-            return False
-        return True
+    def _build_index(self):
+        """Scan directory, extract page text, create Series."""
+        if not os.path.isdir(self.directory):
+            self.logger.log(Status.NOTFOUND, message=f"Directory not found: {self.directory}")
+            self.pdf_panda_series = pd.Series(dtype=object)
+            return
 
-    def search_in_file(self, filename: str, keyword: str) -> List[Tuple[str, int]]:
-        """
-        Search keyword in a single PDF file.
-        Returns list of (filename, page_num) for pages containing keyword.
-        """
-        # LBYL: Validate file before trying to read
-        if not self._is_valid_pdf_file(filename):
-            self.logger.log(Status.ERROR, message=f"Skipping invalid/unreadable file: {filename}")
-            return []
-
-        result = []
-        try:
-            reader = PDFReader(filename)
-            num_pages = reader.get_num_pages()
-            for page_num in range(num_pages):
-                text = reader.get_page_text(page_num)
-                if keyword in text:
-                    result.append((filename, page_num))
-        except Exception as e:
-            self.logger.log(Status.ERROR, exc=e, message=f"Search failed in {filename}")
-        return result
-
-    def search_in_directory(self, directory: str, keyword: str) -> List[Tuple[str, int]]:
-        """
-        Search all PDF files in the given directory for keyword.
-        Returns combined list of (filename, page_num) from all files.
-        """
-        # LBYL: Check directory exists
-        if not os.path.isdir(directory):
-            self.logger.log(Status.NOTFOUND, message=f"Directory not found: {directory}")
-            return []
-
-        all_results = []
-        pdf_files = [f for f in os.listdir(directory) if f.lower().endswith(".pdf")]
+        pdf_files = [f for f in os.listdir(self.directory) if f.lower().endswith(".pdf")]
         if not pdf_files:
             self.logger.log(Status.NOTFOUND, message="No PDF files found in directory")
+            self.pdf_panda_series = pd.Series(dtype=object)
+            return
+
+        print(f"Indexing {len(pdf_files)} PDF file(s)... This may take a moment.")
+
+        index_data = []  # list of (index_tuple, text)
+        for filename in pdf_files:
+            full_path = os.path.join(self.directory, filename)
+            try:
+                reader = PDFReader(full_path)
+                num_pages = reader.get_num_pages()
+                for page_num in range(num_pages):
+                    text = reader.get_page_text(page_num)
+                    index_data.append(((full_path, page_num), text))
+                reader.close()
+            except Exception as e:
+                self.logger.log(Status.ERROR, exc=e, message=f"Failed to index {filename}")
+
+        if not index_data:
+            self.pdf_panda_series = pd.Series(dtype=object)
+            return
+
+        # Unpack and create MultiIndex
+        indices, texts = zip(*index_data)
+        multi_index = pd.MultiIndex.from_tuples(indices, names=["filepath", "page_num"])
+        self.pdf_panda_series = pd.Series(data=texts, index=multi_index)
+        print(f"Indexed {len(self.pdf_panda_series)} page(s) from {len(pdf_files)} file(s).")
+
+    def search(self, keyword: str, case_sensitive: bool = False) -> List[Tuple[str, int]]:
+        """
+        Return list of (filepath, page_num) where keyword appears in page text.
+        """
+        if self.pdf_panda_series is None or self.pdf_panda_series.empty:
             return []
 
-        for filename in pdf_files:
-            full_path = os.path.join(directory, filename)
-            results = self.search_in_file(full_path, keyword)
-            all_results.extend(results)
-        return all_results
+        if case_sensitive:
+            mask = self.pdf_panda_series.str.contains(keyword, na=False, regex=False)
+        else:
+            mask = self.pdf_panda_series.str.contains(keyword, na=False, regex=False, case=False)
+
+        matched_indices = self.pdf_panda_series[mask].index
+        # Convert MultiIndex to list of tuples (filepath, page_num)
+        return [tuple(idx) for idx in matched_indices]
+
+    def refresh(self):
+        """Re‑build the index from scratch."""
+        self._build_index()
 
 # ----------------------------------------------------------------------
-# PDFConcatenator
+# PDFConcatenator (unchanged)
 # ----------------------------------------------------------------------
 class PDFConcatenator:
     """Combine pages from multiple PDFs into a single PDF."""
@@ -149,7 +159,6 @@ class PDFConcatenator:
         if not os.access(dir_name, os.W_OK):
             logger.log(Status.ERROR, message=f"Output directory not writable: {dir_name}")
             return False
-        # Ensure .pdf extension
         if not output_path.lower().endswith(".pdf"):
             logger.log(Status.ERROR, message=f"Output file must have .pdf extension: {output_path}")
             return False
@@ -164,11 +173,9 @@ class PDFConcatenator:
             logger.log(Status.NOTFOUND, message="No pages to concatenate")
             return False
 
-        # LBYL: Validate output path before any processing
         if not self._validate_output_path(output_path, logger):
             return False
 
-        # LBYL: Validate each input file exists and is readable
         for filename, page_num in pages_info:
             if not os.path.isfile(filename):
                 logger.log(Status.ERROR, message=f"Missing file: {filename}")
@@ -176,16 +183,14 @@ class PDFConcatenator:
             if not os.access(filename, os.R_OK):
                 logger.log(Status.ERROR, message=f"Cannot read file: {filename}")
                 return False
-            # Note: we cannot validate page number without opening the file,
-            # but that will be caught in the try block.
 
         writer = pypdf.PdfWriter()
         try:
             for filename, page_num in pages_info:
                 reader = PDFReader(filename)
-                # Page number validity is checked inside PDFReader.get_page()
                 page = reader.get_page(page_num)
                 writer.add_page(page)
+                reader.close()
 
             with open(output_path, "wb") as out_file:
                 writer.write(out_file)
@@ -195,12 +200,13 @@ class PDFConcatenator:
             return False
 
 # ----------------------------------------------------------------------
-# Controller (unchanged logic but uses improved classes)
+# Controller (uses PDFTextIndex, not PDFSearcher)
 # ----------------------------------------------------------------------
 class Controller:
     def __init__(self):
         self.logger = TracebackLogger()
-        self.searcher = PDFSearcher(self.logger)
+        # Build the index once at startup
+        self.index = PDFTextIndex(os.getcwd(), self.logger)
         self.concatenator = PDFConcatenator()
 
     def run(self):
@@ -220,21 +226,18 @@ class Controller:
                 continue
 
             print(f"Searching for '{keyword}'...")
-            current_dir = os.getcwd()
-            results = self.searcher.search_in_directory(current_dir, keyword)
+            results = self.index.search(keyword)
 
             if not results:
                 print(f"No pages found containing '{keyword}'.\n")
                 continue
 
             print(f"Found {len(results)} page(s) containing '{keyword}'.")
-            # Use the config constant instead of asking user
-            out_name = OUTPUT_FILENAME
-            print(f"Output will be saved to: {out_name}")
+            print(f"Output will be saved to: {OUTPUT_FILENAME}")
 
-            success = self.concatenator.concatenate(results, out_name, self.logger)
+            success = self.concatenator.concatenate(results, OUTPUT_FILENAME, self.logger)
             if success:
-                print(f"Successfully created: {out_name}\n")
+                print(f"\033[92mSuccessfully created: {OUTPUT_FILENAME}\033[0m\n")
             else:
                 print("Failed to create output PDF. See error details above.\n")
 
