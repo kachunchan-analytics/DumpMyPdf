@@ -1,5 +1,6 @@
 import os
-import PyPDF2
+import pypdf
+from pypdf import PdfReader
 from typing import List, Tuple
 from traceback_logger import TracebackLogger, Status
 
@@ -22,10 +23,10 @@ class PDFReader:
             if not os.access(self.filepath, os.R_OK):
                 raise PermissionError(f"PDF file not readable: {self.filepath}")
 
-            # Open and read – may still raise PyPDF2 errors (corrupted file)
+            # Open and read – may still raise PyPDF errors (corrupted file)
             try:
                 with open(self.filepath, "rb") as f:
-                    self._reader = PyPDF2.PdfReader(f)
+                    self._reader = PyPDF.PdfReader(f)
             except Exception as e:
                 raise RuntimeError(f"Failed to open PDF {self.filepath}: {e}") from e
         return self._reader
@@ -161,7 +162,7 @@ class PDFConcatenator:
             # Note: we cannot validate page number without opening the file,
             # but that will be caught in the try block.
 
-        writer = PyPDF2.PdfWriter()
+        writer = pypdf.PdfWriter()
         try:
             for filename, page_num in pages_info:
                 reader = PDFReader(filename)
