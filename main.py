@@ -10,6 +10,14 @@ from traceback_logger import TracebackLogger, Status
 OUTPUT_FILENAME = "extracted_results.pdf"
 ADDITIONAL_PAGES = 1
 
+# Adding Extra Prompts 
+ADD_PROMPT = True
+PROMPT_LIST = [
+    "Explain and Summarize the above contents with reference to the materials given",
+    "Compare and Contrast the above contents"
+]
+
+
 # ----------------------------------------------------------------------
 # PDFReader – using PyMuPDF only
 # ----------------------------------------------------------------------
@@ -164,21 +172,104 @@ class PDFConcatenator:
             output_doc.close()
 
 # ----------------------------------------------------------------------
-# Controller
+# PromptHandler – supports fence-only, fence+prompt, or none
+# ----------------------------------------------------------------------
+class PromptHandler:
+    def __init__(self, prompt_list: List[str], logger: TracebackLogger):
+        self.prompt_list = prompt_list
+        self.logger = logger
+        self.mode = 0          # 0=none, 1=fence only, 2=fence+prompt
+        self.selected_prompt = None
+
+    def display_and_select(self) -> bool:
+        """Let user choose output formatting mode and optionally a prompt.
+        Returns True if any formatting (fence) is selected, False if raw mode.
+        """
+        print("\nText output formatting options:")
+        print("  0. No fence, no prompt (raw text)")
+        print("  1. Add backticks fence only")
+        if self.prompt_list:
+            print("  2. Add backticks fence + select a prompt")
+        else:
+            print("  2. (No prompts available – fence only will be used)")
+
+        while True:
+            try:
+                choice = input("Select option (0, 1, 2): ").strip()
+                mode = int(choice)
+                if mode == 0:
+                    self.mode = 0
+                    self.selected_prompt = None
+                    return False
+                elif mode == 1:
+                    self.mode = 1
+                    self.selected_prompt = None
+                    return True
+                elif mode == 2:
+                    if not self.prompt_list:
+                        print("No prompts available. Falling back to fence only.")
+                        self.mode = 1
+                        self.selected_prompt = None
+                        return True
+                    # Now choose a prompt
+                    print("\nAvailable prompts:")
+                    for idx, prompt in enumerate(self.prompt_list, start=1):
+                        print(f"  {idx}. {prompt}")
+                    while True:
+                        try:
+                            p_choice = input("Select prompt number: ").strip()
+                            p_num = int(p_choice)
+                            if 1 <= p_num <= len(self.prompt_list):
+                                self.mode = 2
+                                self.selected_prompt = self.prompt_list[p_num - 1]
+                                return True
+                            else:
+                                print(f"Please enter a number between 1 and {len(self.prompt_list)}.")
+                        except ValueError:
+                            print("Invalid input. Enter a number.")
+                else:
+                    print("Please enter 0, 1, or 2.")
+            except ValueError:
+                print("Invalid input. Enter a number.")
+            except KeyboardInterrupt:
+                print("\nSelection cancelled. Using raw output.")
+                self.mode = 0
+                self.selected_prompt = None
+                return False
+
+    def format_output(self, raw_text: str) -> str:
+        """Apply formatting based on selected mode."""
+        if self.mode == 0:
+            return raw_text
+        elif self.mode == 1:
+            return f"```\n{raw_text}\n```"
+        elif self.mode == 2:
+            return f"```\n{raw_text}\n```\n{self.selected_prompt}"
+        else:
+            return raw_text  # fallback
+
+    def reset(self):
+        self.mode = 0
+        self.selected_prompt = None
+
+# ----------------------------------------------------------------------
+# Controller (modified)
 # ----------------------------------------------------------------------
 class Controller:
     def __init__(self):
         self.logger = TracebackLogger()
         self.index = PDFTextIndex(os.getcwd(), self.logger)
         self.concatenator = PDFConcatenator()
-        # Use the global config constant
         self.additional_pages = ADDITIONAL_PAGES
 
+        # NEW: Initialize prompt handler if enabled
+        if ADD_PROMPT:
+            self.prompt_handler = PromptHandler(PROMPT_LIST, self.logger)
+        else:
+            self.prompt_handler = None
+
     def _expand_with_context(self, results: List[Tuple[str, int]], extra_pages: int) -> List[Tuple[str, int]]:
-        """
-        Expand the list of matched pages by adding extra pages after each match.
-        Maintains order, avoids duplicates.
-        """
+        # (unchanged from original)
         if not results or extra_pages <= 0:
             return results[:]
 
@@ -201,15 +292,26 @@ class Controller:
         return expanded
 
     def _write_text_output(self, results: List[Tuple[str, int]], output_pdf_path: str) -> bool:
-        """Write the extracted page texts to a .txt file (same basename as output_pdf_path)."""
+        """Write extracted texts to .txt, optionally wrapped and with prompt."""
         txt_path = output_pdf_path.replace('.pdf', '.txt')
+        # Build raw text content first
+        raw_lines = []
+        for filepath, page_num in results:
+            page_text = self.index.pdf_panda_series.loc[(filepath, page_num)]
+            raw_lines.append(f"--- {os.path.basename(filepath)} page {page_num + 1} ---")
+            raw_lines.append(page_text)
+            raw_lines.append("")  # blank line between entries
+        raw_text = "\n".join(raw_lines)
+
+        # NEW: Apply prompt formatting if handler exists
+        if self.prompt_handler:
+            final_text = self.prompt_handler.format_output(raw_text)
+        else:
+            final_text = raw_text
+
         try:
             with open(txt_path, 'w', encoding='utf-8') as f:
-                for filepath, page_num in results:
-                    page_text = self.index.pdf_panda_series.loc[(filepath, page_num)]
-                    f.write(f"--- {os.path.basename(filepath)} page {page_num + 1} ---\n")
-                    f.write(page_text)
-                    f.write("\n\n")
+                f.write(final_text)
             return True
         except Exception as e:
             self.logger.log(Status.ERROR, exc=e, message=f"Failed to write text file: {txt_path}")
@@ -245,6 +347,11 @@ class Controller:
             if self.additional_pages > 0:
                 print(f"After adding {self.additional_pages} extra page(s) after each match (no duplicates), "
                       f"total pages to extract: {len(expanded_results)}")
+
+            # NEW: Ask for prompt selection if prompt_handler exists
+            if self.prompt_handler:
+                print("\nWould you like to add a prompt to the text output?")
+                self.prompt_handler.display_and_select()  # stores selected_prompt internally
 
             print(f"Output will be saved to: {OUTPUT_FILENAME}")
 
