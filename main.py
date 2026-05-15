@@ -209,13 +209,16 @@ class PromptHandler:
 
     def _handle_predefined_prompt(self) -> bool:
         """Show list of predefined prompts, let user choose one."""
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+        
         if not self.prompt_list:
             print("No predefined prompts available. Falling back to fence only.")
             return self._handle_fence_only()
 
         print("\nAvailable prompts:")
         for idx, prompt in enumerate(self.prompt_list, start=1):
-            print(f"  {idx}. {prompt}")
+            print(f"  {YELLOW}{idx}. {prompt}{RESET}")
 
         while True:
             try:
@@ -253,11 +256,14 @@ class PromptHandler:
         """Display menu and let user choose output formatting mode.
         Returns True if any formatting (fence) is selected, False if raw mode.
         """
+        YELLOW = "\033[93m"
+        RESET = "\033[0m"
+        
         print("\nText output formatting options:")
-        print(f"  {self.MODE_RAW}. No fence, no prompt (raw text)")
-        print(f"  {self.MODE_FENCE_ONLY}. Add backticks fence only")
-        print(f"  {self.MODE_PREDEFINED}. Add backticks fence + select a predefined prompt")
-        print(f"  {self.MODE_CUSTOM}. Add backticks fence + write custom prompt")
+        print(f"  {YELLOW}{self.MODE_RAW}. No fence, no prompt (raw text){RESET}")
+        print(f"  {YELLOW}{self.MODE_FENCE_ONLY}. Add backticks fence only{RESET}")
+        print(f"  {YELLOW}{self.MODE_PREDEFINED}. Add backticks fence + select a predefined prompt{RESET}")
+        print(f"  {YELLOW}{self.MODE_CUSTOM}. Add backticks fence + write custom prompt{RESET}")
 
         while True:
             try:
