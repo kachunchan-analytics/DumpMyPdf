@@ -263,8 +263,14 @@ class Controller:
 # Main
 # ----------------------------------------------------------------------
 def main():
-    app = Controller()
-    app.run()
+    try:
+        app = Controller()
+        app.run()
+    except KeyboardInterrupt:
+        print("\n\033[93mProgram terminated by user.\033[0m")
+    except Exception as e:
+        print(f"\033[91mUnexpected error: {e}\033[0m")
+        raise
 
 if __name__ == "__main__":
     main()
