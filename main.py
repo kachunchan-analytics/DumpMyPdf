@@ -8,6 +8,7 @@ from traceback_logger import TracebackLogger, Status
 # Config
 # ----------------------------------------------------------------------
 OUTPUT_FILENAME = "extracted_results.pdf"
+ADDITIONAL_PAGES = 1
 
 # ----------------------------------------------------------------------
 # PDFReader – using PyMuPDF only
@@ -170,6 +171,34 @@ class Controller:
         self.logger = TracebackLogger()
         self.index = PDFTextIndex(os.getcwd(), self.logger)
         self.concatenator = PDFConcatenator()
+        # Use the global config constant
+        self.additional_pages = ADDITIONAL_PAGES
+
+    def _expand_with_context(self, results: List[Tuple[str, int]], extra_pages: int) -> List[Tuple[str, int]]:
+        """
+        Expand the list of matched pages by adding extra pages after each match.
+        Maintains order, avoids duplicates.
+        """
+        if not results or extra_pages <= 0:
+            return results[:]
+
+        existing_pages = set(self.index.pdf_panda_series.index) if self.index.pdf_panda_series is not None else set()
+        expanded = []
+        seen = set()
+
+        for filepath, page_num in results:
+            key = (filepath, page_num)
+            if key not in seen:
+                expanded.append(key)
+                seen.add(key)
+
+            for offset in range(1, extra_pages + 1):
+                extra_key = (filepath, page_num + offset)
+                if extra_key in existing_pages and extra_key not in seen:
+                    expanded.append(extra_key)
+                    seen.add(extra_key)
+
+        return expanded
 
     def _write_text_output(self, results: List[Tuple[str, int]], output_pdf_path: str) -> bool:
         """Write the extracted page texts to a .txt file (same basename as output_pdf_path)."""
@@ -177,12 +206,10 @@ class Controller:
         try:
             with open(txt_path, 'w', encoding='utf-8') as f:
                 for filepath, page_num in results:
-                    # Retrieve the page text from the indexed series
                     page_text = self.index.pdf_panda_series.loc[(filepath, page_num)]
-                    # Write header with filename only (not full path) and human-readable page number (1-based)
                     f.write(f"--- {os.path.basename(filepath)} page {page_num + 1} ---\n")
                     f.write(page_text)
-                    f.write("\n\n")  # separate pages
+                    f.write("\n\n")
             return True
         except Exception as e:
             self.logger.log(Status.ERROR, exc=e, message=f"Failed to write text file: {txt_path}")
@@ -192,6 +219,7 @@ class Controller:
         print("PDF Keyword Search Tool")
         print("-----------------------")
         print("Searches for keywords in all PDF files in the current directory.")
+        print(f"Will include {self.additional_pages} extra page(s) after each match for context.\n")
         print("Type 'quit' or 'exit' to stop.\n")
 
         while True:
@@ -211,14 +239,19 @@ class Controller:
                 print(f"\033[93mNo pages found containing '{keyword}'.\n\033[0m")
                 continue
 
+            expanded_results = self._expand_with_context(results, self.additional_pages)
+
             print(f"Found {len(results)} page(s) containing '{keyword}'.")
+            if self.additional_pages > 0:
+                print(f"After adding {self.additional_pages} extra page(s) after each match (no duplicates), "
+                      f"total pages to extract: {len(expanded_results)}")
+
             print(f"Output will be saved to: {OUTPUT_FILENAME}")
 
-            success = self.concatenator.concatenate(results, OUTPUT_FILENAME, self.logger)
+            success = self.concatenator.concatenate(expanded_results, OUTPUT_FILENAME, self.logger)
             if success:
                 print(f"\033[92mSuccessfully created: {OUTPUT_FILENAME}\033[0m")
-                # Also create companion text file
-                if self._write_text_output(results, OUTPUT_FILENAME):
+                if self._write_text_output(expanded_results, OUTPUT_FILENAME):
                     txt_name = OUTPUT_FILENAME.replace('.pdf', '.txt')
                     print(f"\033[92mSuccessfully created: {txt_name}\033[0m\n")
                 else:
