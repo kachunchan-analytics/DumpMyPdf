@@ -1,7 +1,7 @@
 import os
 import fitz  # PyMuPDF
 import pandas as pd
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 from traceback_logger import TracebackLogger, Status
 
 # ----------------------------------------------------------------------
@@ -179,8 +179,8 @@ class Controller:
                 for filepath, page_num in results:
                     # Retrieve the page text from the indexed series
                     page_text = self.index.pdf_panda_series.loc[(filepath, page_num)]
-                    # Write header with human-readable page number (1-based)
-                    f.write(f"--- {filepath} page {page_num + 1} ---\n")
+                    # Write header with filename only (not full path) and human-readable page number (1-based)
+                    f.write(f"--- {os.path.basename(filepath)} page {page_num + 1} ---\n")
                     f.write(page_text)
                     f.write("\n\n")  # separate pages
             return True
