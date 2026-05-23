@@ -12,3 +12,4 @@ wheels/
 # Test files
 *.pdf
 *.epub
+extracted_results.txt
